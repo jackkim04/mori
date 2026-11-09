@@ -3580,18 +3580,40 @@ const M = { tab: 'closet' };
 /* ---------------- tag flow overlay ---------------- */
 let ovTimers = [];
 const VIA_LABEL = { tag:'NFC·QR 태그 확인', nfc:'NFC 태그 확인', trial:'체험용 스탬프', demo:'시연 버튼으로 찍음' };
+/* walking a finished course again: no new stamp or item, but the item is shown again at the end */
+const REWALK = {};
+const doneItem = c => typeof c.item === 'string' ? c.item : (c.item[(S.done[c.id] || {}).season] || courseItem(c));
+const againSub = item => `이미 받은 아이템이에요. ${Object.values(S.equipped).includes(item) ? '지금 입고 있어요.' : '꾸미기에서 다시 입을 수 있어요.'}`;
+function confettiHTML() {
+  const colors = ['#FFC36B','#FF8FB1','#7AD0FF','#B395EE','#9CF0C3','#FFFFFF'];
+  return Array.from({ length: 26 }, (_, i) => { const a = i / 26 * Math.PI * 2 + Math.random() * .3, r = 120 + Math.random() * 90; return `<i style="--x:calc(-50% + ${Math.round(Math.cos(a) * r)}px);--y:calc(-50% + ${Math.round(Math.sin(a) * r)}px);--r:${Math.round(Math.random() * 540 - 270)}deg;background:${colors[i % colors.length]};animation-delay:${(Math.random() * .15).toFixed(2)}s"></i>`; }).join('');
+}
+const revealHTML = (c, item, sub) => `<section class="bphase b2" aria-live="polite">
+        <p class="rv-pre">${esc(c.name)} 코스 완주!</p>
+        <div class="rv-stage"><div class="rays"></div><div class="confetti">${confettiHTML()}</div>
+          <div class="rv-card"><div class="rv-front">?</div><div class="rv-back">${thumbSVG(item)}</div></div></div>
+        <p class="rv-title">짜잔! ${esc(ITEMS[item].name)}</p>
+        <p class="rv-sub">${sub}</p>
+      </section>`;
 function startAcquire(key, via) {
   const res = acquire(key, via);
   const { st, c } = res;
+  let rewalk = null;
+  if (res.already && isDone(c)) {
+    const seen = REWALK[c.id] || (REWALK[c.id] = new Set()); seen.add(key);
+    if (seen.size >= c.stamps.length) { delete REWALK[c.id]; rewalk = { last: true }; }
+    else rewalk = { last: false, n: seen.size, nx: c.stamps.find(s => !seen.has(s.key)) };
+  }
   if (current === 'course' && CUR === c.id) show('course', c.id);
   const ov = $('#overlay');
   ovTimers.forEach(clearTimeout); ovTimers = [];
   let rewards;
-  if (res.already) rewards = `<p class="ov-disc">이미 ${hhmm(res.stamp.t)}에 찍은 스탬프예요.</p>`;
+  if (rewalk) rewards = rewalk.last
+    ? `<p class="ov-fr">다시 걸은 코스 완주!</p><p class="ov-disc">이미 찍은 스탬프라 불씨와 할인은 그대로예요.</p>`
+    : `<p class="ov-fr">다시 걷는 중 ${rewalk.n}/${c.stamps.length}</p><p class="ov-disc">이미 ${hhmm(res.stamp.t)}에 찍은 스탬프라 불씨와 할인은 그대로예요.</p>${rewalk.nx ? `<div class="ov-next"><span>다음 스탬프</span><b>${rewalk.nx.n}. ${esc(rewalk.nx.name)}</b></div>` : ''}`;
+  else if (res.already) rewards = `<p class="ov-disc">이미 ${hhmm(res.stamp.t)}에 찍은 스탬프예요.</p>`;
   else if (res.completed) rewards = `
-      <p class="ov-done">${esc(c.name)} 코스 완주!</p>
-      <p class="ov-sub">기다리던 모리가 ${esc(josa(ITEMS[res.item].name, '을', '를'))} 건네줘요.</p>
-      <div class="ov-items"><div class="ov-item big">${thumbSVG(res.item)}<p>${esc(ITEMS[res.item].name)}</p>${res.fresh ? '' : '<p class="tiny" style="color:#cfc8f0">이미 있는 아이템</p>'}</div></div>
+      <p class="ov-fr">불씨 조각 +1, 스탬프 ${c.stamps.length}곳 완료!</p>
       <p class="ov-disc">${discLine(res.before, res.after, st)}</p>`;
   else {
     const nx = res.next;
@@ -3600,7 +3622,11 @@ function startAcquire(key, via) {
       ${nx ? `<div class="ov-next"><span>다음 스탬프</span><b>${nx.stamp.n}. ${esc(nx.stamp.name)}</b>${nx.ahead ? `<em>${kmTxt(nx.km)}, 걸어서 ${nx.min}분</em>` : '<em>앞쪽에 남은 스탬프예요</em>'}</div>` : ''}`;
   }
   const showMori = res.completed;
+  const finish = res.completed || (rewalk && rewalk.last);
+  const rItem = res.completed ? res.item : finish ? doneItem(c) : null;
+  const reveal = rItem ? revealHTML(c, rItem, res.completed ? (res.fresh ? '기다리던 모리가 건네줬어요. 바로 입혀뒀어요.' : againSub(rItem)) : againSub(rItem)) : '';
   ov.innerHTML = `<div class="ov" role="dialog" aria-modal="true" aria-label="${esc(st.name)} 스탬프" style="--c:${c.color}">
+      <section class="bphase b1">
       <p class="ov-kind">${esc(c.name)} 코스, ${st.n}번째 스탬프${st.fake ? ' (가상 업소)' : ''}</p>
       <h2 class="ov-place">${esc(st.name)}</h2>
       <ol class="ov-steps"><li><i></i>${VIA_LABEL[via] || 'NFC 태그 확인'}</li><li><i></i>위치 확인 (${MODE === 'presenter' ? '시연' : '체험'} 모드)</li></ol>
@@ -3610,7 +3636,8 @@ function startAcquire(key, via) {
         <div class="ov-moriwrap" id="ovMori">${stageHTML(res.prevEquipped, res.gPrev)}</div>
       </div>
       <div class="ov-rewards">${rewards}</div>
-      <div class="ov-actions">${res.completed ? `<button class="btn ghost" data-act="ov-close">확인</button><button class="btn primary" data-act="ov-necut" data-id="${c.id}">${P ? '추억 카드 보기' : '모리네컷 만들기'}</button>` : '<button class="btn primary" data-act="ov-close">확인</button>'}</div>
+      </section>${reveal}
+      <div class="ov-actions">${finish ? `<button class="btn ghost" data-act="ov-close">확인</button><button class="btn primary" data-act="ov-necut" data-id="${c.id}">${P ? '추억 카드 보기' : '모리네컷 만들기'}</button>` : '<button class="btn primary" data-act="ov-close">확인</button>'}</div>
     </div>`;
   ov.classList.add('open');
   const box = ov.firstElementChild;
@@ -3620,18 +3647,24 @@ function startAcquire(key, via) {
     if (cl === 's4' && !res.already) {
       const wrap = $('#ovMori');
       if (wrap) {
-        wrap.innerHTML = stageHTML(S.equipped, res.gPrev);
+        const eqNow = res.completed ? res.prevEquipped : S.equipped;
+        wrap.innerHTML = stageHTML(eqNow, res.gPrev);
         const stg = wrap.firstElementChild;
-        requestAnimationFrame(() => requestAnimationFrame(() => { stg.setAttribute('style', glowVars(res.gNow)); stg.querySelector('.layer').innerHTML = emberSVG(res.gNow, res.gNow > res.gPrev) + layers(S.equipped).back; }));
+        requestAnimationFrame(() => requestAnimationFrame(() => { stg.setAttribute('style', glowVars(res.gNow)); stg.querySelector('.layer').innerHTML = emberSVG(res.gNow, res.gNow > res.gPrev) + layers(eqNow).back; }));
       }
     }
   }, seq[i])));
+  if (rItem) {
+    const tR = reduceMotion ? 0 : 3700;
+    ovTimers.push(setTimeout(() => box.classList.add('reveal'), tR));
+    ovTimers.push(setTimeout(() => box.classList.add('open'), tR + (reduceMotion ? 0 : 1250)));
+  }
   setTimeout(() => { const b = ov.querySelector('[data-act="ov-close"]'); b && b.focus({ preventScroll:true }); }, reduceMotion ? 0 : 2600);
 }
 function startBatch(cid) {
   const c = COURSE[cid];
   const missing = c.stamps.filter(s => !has(s.key));
-  if (!missing.length) { toast('이미 스탬프를 다 찍은 코스예요'); return; }
+  const again = !missing.length;
   const before = tierInfo();
   let comp = null;
   missing.forEach(s => { const r = acquire(s.key, 'trial'); if (r.completed) comp = r; });
@@ -3639,24 +3672,18 @@ function startBatch(cid) {
   if (current === 'course' && CUR === c.id) show('course', c.id);
   const ov = $('#overlay'); ovTimers.forEach(clearTimeout); ovTimers = [];
   const seals = c.stamps.map((s, i) => `<div class="bs" style="--d:${i * 170}ms">${sealSVG(s, stampOf(s.key).rot)}<span>${esc(s.name)}</span></div>`).join('');
-  const item = comp && comp.item;
-  const colors = ['#FFC36B','#FF8FB1','#7AD0FF','#B395EE','#9CF0C3','#FFFFFF'];
-  const confetti = Array.from({ length: 26 }, (_, i) => { const a = i / 26 * Math.PI * 2 + Math.random() * .3, r = 120 + Math.random() * 90; return `<i style="--x:calc(-50% + ${Math.round(Math.cos(a) * r)}px);--y:calc(-50% + ${Math.round(Math.sin(a) * r)}px);--r:${Math.round(Math.random() * 540 - 270)}deg;background:${colors[i % colors.length]}"></i>`; }).join('');
+  const item = comp ? comp.item : again ? doneItem(c) : null;
+  const sub = comp && comp.fresh ? '기다리던 모리가 건네줬어요. 바로 입혀뒀어요.' : againSub(item);
   ov.innerHTML = `<div class="ov batch" role="dialog" aria-modal="true" aria-label="${esc(c.name)} 코스 스탬프" style="--c:${c.color}">
       <section class="bphase b1">
-        <p class="ov-kind">${esc(c.name)} 코스</p>
+        <p class="ov-kind">${esc(c.name)} 코스${again ? ' 다시 걷기' : ''}</p>
         <h2 class="ov-place">스탬프 ${c.stamps.length}곳 완료!</h2>
         <div class="bseals">${seals}</div>
-        <p class="ov-fr">불씨 조각 +${missing.length}</p>
-        <p class="ov-disc">${discLine(before, after, missing.find(s => s.zone === 'alley') || missing[0])}</p>
+        ${again ? `<p class="ov-fr">이미 찍은 스탬프예요</p>
+        <p class="ov-disc">불씨와 할인은 그대로예요 (할인 <strong>${after.rate}%</strong>)</p>` : `<p class="ov-fr">불씨 조각 +${missing.length}</p>
+        <p class="ov-disc">${discLine(before, after, missing.find(s => s.zone === 'alley') || missing[0])}</p>`}
       </section>
-      ${item ? `<section class="bphase b2" aria-live="polite">
-        <p class="rv-pre">${esc(c.name)} 코스 완주!</p>
-        <div class="rv-stage"><div class="rays"></div><div class="confetti">${confetti}</div>
-          <div class="rv-card"><div class="rv-front">?</div><div class="rv-back">${thumbSVG(item)}</div></div></div>
-        <p class="rv-title">짜잔! ${esc(ITEMS[item].name)}</p>
-        <p class="rv-sub">기다리던 모리가 건네줬어요. 바로 입혀뒀어요.</p>
-      </section>` : ''}
+      ${item ? revealHTML(c, item, sub) : ''}
       <div class="ov-actions"><button class="btn ghost" data-act="ov-mori">모리 꾸미기</button><button class="btn primary" data-act="ov-necut" data-id="${c.id}">추억 카드 보기</button></div>
     </div>`;
   ov.classList.add('open');
@@ -3668,6 +3695,7 @@ function startBatch(cid) {
     ovTimers.push(setTimeout(() => box.classList.add('open'), tReveal + (reduceMotion ? 0 : 1250)));
   }
 }
+
 function discLine(b, a, st) {
   if (a.rate > b.rate) return `할인 <strong>${b.rate}% → ${a.rate}%</strong>${st.zone === 'alley' && !b.alley ? ' (골목 스탬프로 한 단계 더)' : ''}`;
   return `할인 <strong>${a.rate}%</strong> 그대로예요${a.tier === 3 ? ' (최대 할인)' : ''}`;
@@ -4184,7 +4212,7 @@ function tagStamp(key) {
 function renderFab() {
   const el = $('#fab'); if (!el) return;
   const c = current === 'course' ? COURSE[CUR] : null;
-  const show = c && !isDone(c) && tour == null;
+  const show = c && tour == null;
   $('#app').classList.toggle('has-fab', !!show);
   el.innerHTML = show ? `<button class="fab" data-act="fab-tag" style="--c:${c.color}">${NFC_ICON}<span>${MODE === 'presenter' ? 'NFC 태그' : '스탬프 한 번에 찍기'}</span></button>` : '';
 }
@@ -4235,7 +4263,7 @@ document.addEventListener('click', e => {
     case 'demo-tag': { const st = STAMP[el.dataset.id]; closeTools(); if (!(current === 'course' && CUR === st.course)) go('c-' + st.course); setTimeout(() => tagStamp(st.key), 80); break; }
     case 'open-admin': closeTools(); go('admin'); break;
     case 'open-share': closeTools(); go('share'); break;
-    case 'fab-tag': { const c = COURSE[CUR]; if (!c) break; if (P) { startBatch(c.id); break; } const nx = c.stamps.find(s => !has(s.key)); if (nx) tagStamp(nx.key); break; }
+    case 'fab-tag': { const c = COURSE[CUR]; if (!c) break; if (P) { startBatch(c.id); break; } const nx = c.stamps.find(s => !has(s.key)) || c.stamps.find(s => !(REWALK[c.id] && REWALK[c.id].has(s.key))); if (nx) tagStamp(nx.key); break; }
     case 'tour-go': tourGo(); break;
     case 'tour-skip': endTour(); break;
     case 'ov-necut': NC.course = el.dataset.id; NC.focus = true; closeOverlay('card'); break;
